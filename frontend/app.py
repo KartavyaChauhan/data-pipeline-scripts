@@ -1,65 +1,72 @@
+import uuid
+
 import gradio as gr
-import torch
-import time
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import requests
 
-# 1. Load the recommended model and tokenizer
-model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+BACKEND_URL = "http://localhost:8000/api"
 
-print("Loading tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained(model_id)
+SESSION_ID = str(uuid.uuid4())
 
-print("Loading model weights to CPU...")
-model = AutoModelForCausalLM.from_pretrained(
-	model_id,
-	torch_dtype=torch.float32, # Ensure CPU compatibility
-	device_map="cpu"
-)
-print("Model loaded successfully!")
 
-# 2. Define the response generation with memory
-def generate_response(message, history):
-	start_time = time.time()
-	
-	# Gradio's history is a list of [user_msg, assistant_msg]. We format this into Qwen's expected chat template.
-	messages = []
-	for user_msg, bot_msg in history:
-		messages.append({"role": "user", "content": user_msg})
-		messages.append({"role": "assistant", "content": bot_msg})
-	
-	# Add the current user message
-	messages.append({"role": "user", "content": message})
+def respond(message, chat_history_hosted, chat_history_oss):
+	if not message.strip():
+		return "", chat_history_hosted, chat_history_oss
 
-	# Tokenize and format
-	text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-	inputs = tokenizer([text], return_tensors="pt")
+	try:
+		payload = {"session_id": SESSION_ID, "prompt": message}
+		response = requests.post(f"{BACKEND_URL}/chat", json=payload, timeout=60)
 
-	# Generate response
-	generated_ids = model.generate(
-		**inputs,
-		max_new_tokens=256,
-		temperature=0.7,
-		do_sample=True
+		if response.status_code == 200:
+			data = response.json()
+			hosted_reply = data["hosted_response"]
+			oss_reply = data["oss_response"]
+		else:
+			detail = response.json().get("detail", "Unknown error")
+			hosted_reply = f"Error: {detail}"
+			oss_reply = f"Error: {detail}"
+	except Exception as e:
+		hosted_reply = f"Failed to connect to backend: {str(e)}"
+		oss_reply = f"Failed to connect to backend: {str(e)}"
+
+	chat_history_hosted.append((message, hosted_reply))
+	chat_history_oss.append((message, oss_reply))
+
+	return "", chat_history_hosted, chat_history_oss
+
+
+def clear_chat():
+	try:
+		requests.post(f"{BACKEND_URL}/clear", json={"session_id": SESSION_ID, "prompt": ""}, timeout=30)
+	except Exception:
+		pass
+	return [], []
+
+
+with gr.Blocks(title="AI Personal Assistant Benchmarking") as demo:
+	gr.Markdown("# 🤖 Ollive AI Assistant Benchmarking Platform")
+	gr.Markdown(
+		"Test side-by-side performance of **Frontier Models (GPT-4.1 via FreeTheAI)** vs **Open Source Models (Qwen 2.5-72B via HF)**."
 	)
-	
-	# Extract only the newly generated tokens
-	generated_ids = [
-		output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
-	]
 
-	response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-	
-	# Calculate latency for our later report
-	latency = round(time.time() - start_time, 2)
-	return response + f"\n\n*(Latency: {latency}s)*"
+	with gr.Row():
+		with gr.Column():
+			gr.Markdown("### 🚀 Frontier Assistant (bbl/gpt-4.1)")
+			hosted_chatbot = gr.Chatbot(label="GPT-4.1 Context Stream")
 
-# 3. Create the Public Interface
-demo = gr.ChatInterface(
-	fn=generate_response,
-	title="Ollive AI Bonus: Public OSS Deployment",
-	description="Running `Qwen2.5-0.5B-Instruct` natively on a free Hugging Face CPU space. Includes multi-turn memory.",
-	theme="soft"
-)
+		with gr.Column():
+			gr.Markdown("### 🌐 Open Source Assistant (Qwen 2.5-72B)")
+			oss_chatbot = gr.Chatbot(label="Qwen 2.5 Context Stream")
+
+	msg = gr.Textbox(placeholder="Type your message or evaluation prompt here and press Enter...", label="Universal Input Layer")
+
+	with gr.Row():
+		submit_btn = gr.Button("Send to Both Assistants", variant="primary")
+		clear_btn = gr.Button("Clear Conversational Memory")
+
+	msg.submit(respond, [msg, hosted_chatbot, oss_chatbot], [msg, hosted_chatbot, oss_chatbot])
+	submit_btn.click(respond, [msg, hosted_chatbot, oss_chatbot], [msg, hosted_chatbot, oss_chatbot])
+	clear_btn.click(clear_chat, None, [hosted_chatbot, oss_chatbot])
+
 
 if __name__ == "__main__":
-	demo.launch()
+	demo.launch(server_name="0.0.0.0", server_port=7860)

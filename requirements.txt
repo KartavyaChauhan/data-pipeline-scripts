@@ -5,5 +5,3 @@ huggingface-hub==0.20.3
 gradio==4.19.2
 python-dotenv==1.0.1
 pytest==8.0.2
-torch
-transformers
