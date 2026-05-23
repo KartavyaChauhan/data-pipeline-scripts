@@ -1,4 +1,4 @@
-# 🤖 Ollive AI Dual-Assistant Benchmarking Engine
+# 🤖 AI Dual-Assistant Benchmarking Engine
 
 A full-stack evaluation platform designed to run side-by-side comparisons of Hosted Frontier Models (GPT-4.1) and Open Source Models (Qwen) using a unified conversational memory system and an automated LLM-as-a-judge framework.
 
